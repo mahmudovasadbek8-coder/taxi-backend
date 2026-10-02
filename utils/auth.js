@@ -29,7 +29,7 @@ function verify(token) {
     if (user.role === "admin" && db.admins.some((a) => a.id === user.adminId)) return user;
     if (user.role === "driver") {
       const d = db.drivers.find((x) => x.id === user.driverId);
-            if (d && !d.blocked && !d.deleted) return user;
+      if (d && !d.blocked && !d.deleted) return user;
     }
   } catch (e) {}
   return null;
