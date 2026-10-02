@@ -27,7 +27,7 @@ router.post("/login", (req, res) => {
   if (tooMany(ip)) return res.status(429).json({ error: "Juda ko'p urinish. 10 daqiqadan keyin qayta urining." });
   const { phone, password } = req.body;
   const db = load();
-  const driver = db.drivers.find((d) => d.phone === String(phone || "").trim());
+  const driver = db.drivers.find((d) => !d.deleted && d.phone === String(phone || "").trim());
   if (!driver || !bcrypt.compareSync(String(password || ""), driver.passwordHash || "")) {
     recordFail(ip);
     return res.status(401).json({ error: "Telefon raqam yoki parol xato" });
@@ -45,7 +45,7 @@ router.get("/me", requireDriver, (req, res) => {
 
 // GET /api/drivers — barcha haydovchilar
 router.get("/", requireAdmin, (req, res) => {
-  res.json(load().drivers.map(safe));
+  res.json(load().drivers.filter((d) => !d.deleted).map(safe));
 });
 
 // POST /api/drivers { name, phone, password, carClass, carModel, carNumber }
@@ -55,7 +55,7 @@ router.post("/", requireAdmin, (req, res) => {
     return res.status(400).json({ error: "Ism, telefon va parol majburiy" });
   }
   const db = load();
-  if (db.drivers.some((d) => d.phone === String(phone).trim())) {
+  if (db.drivers.some((d) => !d.deleted && d.phone === String(phone).trim())) {
     return res.status(409).json({ error: "Bu telefon raqamli haydovchi allaqachon bor" });
   }
   const driver = {
@@ -87,7 +87,7 @@ router.patch("/:id", requireAdmin, (req, res) => {
   const d = findDriver(db, req.params.id);
   if (!d) return res.status(404).json({ error: "Haydovchi topilmadi" });
   const { name, phone, carClass, carModel, carNumber, password } = req.body;
-  if (phone && db.drivers.some((x) => x.id !== d.id && x.phone === String(phone).trim())) {
+  if (phone && db.drivers.some((x) => !x.deleted && x.id !== d.id && x.phone === String(phone).trim())) {
     return res.status(409).json({ error: "Bu telefon raqam boshqa haydovchida bor" });
   }
   if (name) d.name = String(name).trim();
@@ -116,6 +116,26 @@ router.post("/:id/block", requireAdmin, (req, res) => {
   }
   save(db);
   res.json(safe(d));
+});
+
+// DELETE /api/drivers/:id — ishdan ketgan haydovchini o'chirish.
+// Ro'yxatdan yo'qoladi va kira olmaydi, lekin eski buyurtmalari va hisobotlari saqlanadi.
+router.delete("/:id", requireAdmin, (req, res) => {
+  const db = load();
+  const d = findDriver(db, req.params.id);
+  if (!d || d.deleted) return res.status(404).json({ error: "Haydovchi topilmadi" });
+  if (d.status === "busy") {
+    return res.status(409).json({ error: "Haydovchi hozir buyurtmada. Avval buyurtma tugasin yoki bekor qilinsin." });
+  }
+  d.deleted = true;
+  d.deletedAt = new Date().toISOString();
+  d.status = "offline";
+  clearZone(d);
+  save(db);
+  const io = req.app.get("io");
+  io.to(`driver_${d.id}`).emit("driver:blocked"); // ilovadan chiqarib yuboriladi
+  notifyQueues(io);
+  res.json({ ok: true });
 });
 
 // POST /api/drivers/:id/credit { amount } — balans qo'shish
