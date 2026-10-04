@@ -38,6 +38,7 @@ function defaultData() {
       },
     ],
     zones: [],
+    places: [],
     orders: [],
     messages: [],
     settings: {},
@@ -58,6 +59,8 @@ function migrate(db) {
   if (!db.nextZoneId) db.nextZoneId = 1;
   if (!db.nextMessageId) db.nextMessageId = 1;
   if (!db.nextAdminId) db.nextAdminId = 1;
+  if (!db.places) db.places = [];
+  if (!db.nextPlaceId) db.nextPlaceId = 1;
   for (const d of db.drivers) {
     if (!d.carClass) d.carClass = "komfort";
     if (d.zoneId === undefined) d.zoneId = null;

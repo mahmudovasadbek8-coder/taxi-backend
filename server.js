@@ -13,6 +13,8 @@ const ordersRouter = require("./routes/orders");
 const dispatchRouter = require("./routes/dispatch");
 const zonesRouter = require("./routes/zones");
 const { router: authRouter } = require("./routes/auth");
+const placesRouter = require("./routes/places");
+const statsRouter = require("./routes/stats");
 const { verify } = require("./utils/auth");
 const { load } = require("./db");
 
@@ -34,6 +36,8 @@ app.use("/api/drivers", driversRouter);
 app.use("/api/orders", ordersRouter);
 app.use("/api/dispatch", dispatchRouter);
 app.use("/api/zones", zonesRouter);
+app.use("/api/places", placesRouter);
+app.use("/api/stats", statsRouter);
 
 // Tariflar (haydovchi ilovasi jonli narxni hisoblashi uchun)
 app.get("/api/tariff", (req, res) => {
