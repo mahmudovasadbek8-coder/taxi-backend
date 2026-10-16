@@ -7,6 +7,14 @@ const { notifyQueues, updateZoneMembership, clearZone } = require("../utils/queu
 const { signDriver, requireAuth, requireAdmin, requireDriver } = require("../utils/auth");
 const { recordFail, tooMany } = require("./auth");
 
+// Mashina turi — admin yaratgan "faqat shu turdagi mashina" tariflaridan biri
+function validClass(db, key) {
+  const t = db.tariffs.find((x) => x.mode === "class" && x.key === key);
+  if (t) return t.key;
+  const first = db.tariffs.find((x) => x.mode === "class");
+  return first ? first.key : "komfort";
+}
+
 function safe(d) {
   const { password, passwordHash, ...rest } = d;
   return rest;
@@ -63,7 +71,7 @@ router.post("/", requireAdmin, (req, res) => {
     name: String(name).trim(),
     phone: String(phone).trim(),
     passwordHash: bcrypt.hashSync(String(password), 10),
-    carClass: carClass === "damas" ? "damas" : "komfort",
+    carClass: validClass(db, carClass),
     carModel: carModel || "",
     carNumber: carNumber || "",
     status: "offline",
@@ -92,7 +100,7 @@ router.patch("/:id", requireAdmin, (req, res) => {
   }
   if (name) d.name = String(name).trim();
   if (phone) d.phone = String(phone).trim();
-  if (carClass) d.carClass = carClass === "damas" ? "damas" : "komfort";
+  if (carClass) d.carClass = validClass(db, carClass);
   if (carModel !== undefined) d.carModel = carModel;
   if (carNumber !== undefined) d.carNumber = carNumber;
   if (password) d.passwordHash = bcrypt.hashSync(String(password), 10); // parolni tiklash

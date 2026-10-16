@@ -6,6 +6,7 @@ const { distanceKm, calcFare } = require("../utils/distance");
 const { zoneQueue, notifyQueues, clearZone } = require("../utils/queue");
 const { notice } = require("../utils/log");
 const { requireAuth, requireAdmin, requireDriver } = require("../utils/auth");
+const { tariffById, tariffByKey, defaultTariff, priceSnapshot, finalFare } = require("../utils/pricing");
 
 // ===== SOZLAMALAR =====
 const ORDER_FEE = 2000; // har bajarilgan buyurtmadan yechiladigan summa (so'm)
@@ -23,7 +24,7 @@ function driverView(order) {
 function canTake(d, order) {
   return (
     (!REQUIRE_BALANCE || (d.credit || 0) >= ORDER_FEE) &&
-    (!order.requestedClass || d.carClass === order.requestedClass)
+    (!order.requestedClass || d.carClass === order.requestedClass) // faqat shu turdagi mashina kerak bo'lsa
   );
 }
 
@@ -32,7 +33,8 @@ function findDriver(db, order) {
   const tried = order.triedDriverIds || [];
   const fits = (d) => d.status === "available" && !tried.includes(d.id) && canTake(d, order);
 
-  if (order.zoneId) {
+  // "Eng yaqin mashina" tarifi (Dostavka) — stoyanka navbatiga qaramay eng yaqiniga
+  if (order.zoneId && !order.nearestOnly) {
     // doiradan vaqtincha chiqib turganlar o'tkazib yuboriladi (joyi saqlanadi)
     const d = zoneQueue(db, order.zoneId).find((x) => fits(x) && !x.outsideSince);
     if (d) return { driver: d, method: "navbat", dist: null };
@@ -128,22 +130,47 @@ router.get("/", requireAdmin, (req, res) => {
 });
 
 // POST /api/orders — admin yangi buyurtma
-// body: { customerPhone, customerAddress, customerLat, customerLng, carClass, zoneId }
+// body: { customerPhone, customerAddress, customerLat, customerLng, zoneId,
+//         tariffId, extraIds: [..], extraAmount, note }
 router.post("/", requireAdmin, (req, res) => {
   const { customerPhone, customerAddress, customerLat, customerLng } = req.body;
   if (!customerPhone || !customerAddress) {
     return res.status(400).json({ error: "Mijoz telefoni va manzili majburiy" });
   }
   const db = load();
+
+  // Tarif (eski admin "carClass" yuborsa ham tushunadi)
+  let tariff = req.body.tariffId ? tariffById(db, req.body.tariffId) : null;
+  if (!tariff && req.body.carClass) tariff = tariffByKey(db, req.body.carClass);
+  if (!tariff) tariff = defaultTariff(db);
+
+  // Qo'shimchalar ro'yxatdan + qo'lda kiritilgan summa
+  const extras = (Array.isArray(req.body.extraIds) ? req.body.extraIds : [])
+    .map((id) => db.extras.find((e) => e.id === Number(id)))
+    .filter(Boolean)
+    .map((e) => ({ name: e.name, price: e.price }));
+  const extraAmount = Math.max(0, Number(req.body.extraAmount) || 0);
+  const note = String(req.body.note || "").trim().slice(0, 200);
+  const snap = priceSnapshot(db, tariff, extras, extraAmount);
+  const requiredClass = tariff.mode === "class" ? tariff.key : null;
+
   const order = {
     id: db.nextOrderId++,
     customerPhone,
     customerAddress,
     customerLat: customerLat ?? null,
     customerLng: customerLng ?? null,
-    requestedClass: req.body.carClass || null,
-    fareClass: req.body.carClass || null, // narx turi: null = "farqi yo'q" (5000 dan)
-    carClass: req.body.carClass || null,
+    tariffId: tariff.id,
+    tariffName: tariff.name,
+    nearestOnly: tariff.mode === "nearest",
+    requestedClass: requiredClass,
+    carClass: requiredClass,
+    extras,
+    extraAmount,
+    extrasTotal: snap.extrasTotal,
+    note,
+    startFare: snap.startFare,
+    pricing: snap.pricing,
     zoneId: req.body.zoneId ? Number(req.body.zoneId) : null,
     triedDriverIds: [],
     assignMethod: null,
@@ -178,6 +205,7 @@ router.post("/:id/take", requireDriver, (req, res) => {
     return res.status(409).json({ error: "Avval joriy buyurtmangizni tugating" });
   }
   if (!canTake(driver, order)) {
+    // (requestedClass — faqat shu turdagi mashina talab qilinsa)
     return res.status(403).json({
       error: order.requestedClass && driver.carClass !== order.requestedClass
         ? "Bu buyurtma boshqa turdagi mashina uchun"
@@ -215,6 +243,8 @@ router.post("/street", requireDriver, (req, res) => {
     return res.status(402).json({ error: `Balans yetarli emas (kamida ${ORDER_FEE} so'm kerak)` });
   }
   const now = new Date().toISOString();
+  const streetTariff = tariffByKey(db, driver.carClass) || defaultTariff(db);
+  const streetSnap = priceSnapshot(db, streetTariff);
   const order = {
     id: db.nextOrderId++,
     customerPhone: "—",
@@ -222,8 +252,16 @@ router.post("/street", requireDriver, (req, res) => {
     customerLat: lat ?? null,
     customerLng: lng ?? null,
     requestedClass: null,
-    fareClass: driver.carClass, // ko'chadan — mijoz mashinani o'zi tanlab o'tirdi
     carClass: driver.carClass,
+    // ko'chadan — mijoz mashinani o'zi tanlab o'tirdi: haydovchi mashinasi tarifi bo'yicha
+    tariffId: streetTariff ? streetTariff.id : null,
+    tariffName: streetTariff ? streetTariff.name : "Ko'cha",
+    extras: [],
+    extraAmount: 0,
+    extrasTotal: 0,
+    note: "",
+    startFare: streetSnap.startFare,
+    pricing: streetSnap.pricing,
     zoneId: null,
     triedDriverIds: [],
     assignMethod: "ko'cha",
@@ -350,8 +388,14 @@ router.patch("/:id/status", requireAuth, (req, res) => {
         ? Math.max(0, (new Date(order.startedAt) - new Date(order.arrivedAt)) / 1000)
         : 0;
     order.waitSeconds = Math.round(preWaitSec + (order.tripIdleSeconds || 0));
-    const fareClass = "fareClass" in order ? order.fareClass : order.carClass;
-    order.fare = calcFare(order.tripDistanceKm || 0, fareClass, order.waitSeconds);
+    if (order.startFare != null && order.pricing) {
+      // yangi tizim: buyurtma berilgan paytdagi narxlar bilan
+      order.fare = finalFare(order, order.tripDistanceKm || 0, order.waitSeconds);
+    } else {
+      // eski buyurtmalar (yangilanishdan oldin berilgan)
+      const fareClass = "fareClass" in order ? order.fareClass : order.carClass;
+      order.fare = calcFare(order.tripDistanceKm || 0, fareClass, order.waitSeconds);
+    }
     order.fee = ORDER_FEE;
     if (driver) {
       driver.status = "available";
