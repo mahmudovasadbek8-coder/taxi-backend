@@ -6,6 +6,7 @@
 const fs = require("fs");
 const path = require("path");
 const bcrypt = require("bcryptjs");
+const { DEFAULT_TARIFFS } = require("./utils/pricing");
 
 const DATA_DIR = process.env.DATA_DIR || __dirname;
 const DB_FILE = path.join(DATA_DIR, "data.json");
@@ -61,6 +62,13 @@ function migrate(db) {
   if (!db.nextAdminId) db.nextAdminId = 1;
   if (!db.places) db.places = [];
   if (!db.nextPlaceId) db.nextPlaceId = 1;
+  // Narxlar (2-bosqich): tariflar va qo'shimchalar
+  if (!db.tariffs) {
+    db.tariffs = DEFAULT_TARIFFS.map((t) => ({ ...t }));
+    db.nextTariffId = DEFAULT_TARIFFS.length + 1;
+  }
+  if (!db.extras) db.extras = [];
+  if (!db.nextExtraId) db.nextExtraId = 1;
   for (const d of db.drivers) {
     if (!d.carClass) d.carClass = "komfort";
     if (d.zoneId === undefined) d.zoneId = null;

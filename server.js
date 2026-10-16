@@ -15,6 +15,7 @@ const zonesRouter = require("./routes/zones");
 const { router: authRouter } = require("./routes/auth");
 const placesRouter = require("./routes/places");
 const statsRouter = require("./routes/stats");
+const pricingRouter = require("./routes/pricing");
 const { verify } = require("./utils/auth");
 const { load } = require("./db");
 
@@ -38,10 +39,24 @@ app.use("/api/dispatch", dispatchRouter);
 app.use("/api/zones", zonesRouter);
 app.use("/api/places", placesRouter);
 app.use("/api/stats", statsRouter);
+app.use("/api/pricing", pricingRouter);
 
 // Tariflar (haydovchi ilovasi jonli narxni hisoblashi uchun)
 app.get("/api/tariff", (req, res) => {
-  res.json(require("./utils/distance").TARIFF);
+  // Eski haydovchi ilovalari bilan moslik uchun (bazadagi narxlar, eski formatda)
+  const { getPricing } = require("./utils/pricing");
+  const db = load();
+  const p = getPricing(db);
+  const CLASS_EXTRA = {};
+  for (const t of db.tariffs) if (t.mode === "class") CLASS_EXTRA[t.key] = t.extra;
+  res.json({
+    BASE_FARE: p.baseFare,
+    CLASS_EXTRA,
+    PER_KM: p.perKm,
+    FREE_WAIT_SEC: p.freeWaitSec,
+    WAIT_STEP_SEC: p.waitStepSec,
+    WAIT_STEP_PRICE: p.waitStepPrice,
+  });
 });
 
 app.get("/", (req, res) => {
